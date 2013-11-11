@@ -1,0 +1,9 @@
+lib_managed
+submission
+target
+.cache
+
+.project
+.classpath
+.settings
+*~
