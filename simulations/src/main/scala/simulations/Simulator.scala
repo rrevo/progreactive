@@ -1,13 +1,15 @@
 package simulations
 
 class Simulator {
+  
   type Action = () => Unit
-
-  protected type Agenda = List[WorkItem]
 
   case class WorkItem(time: Int, action: Action)
 
+  protected type Agenda = List[WorkItem]
+
   protected[simulations] var agenda: Agenda = List()
+ 
   protected var currentTime = 0
 
   protected def afterDelay(delay: Int)(action: => Unit) {

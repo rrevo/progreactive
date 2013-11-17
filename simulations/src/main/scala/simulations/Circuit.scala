@@ -7,7 +7,7 @@ class Wire {
   private var actions: List[Simulator#Action] = List()
 
   def getSignal: Boolean = sigVal
-  
+
   def setSignal(s: Boolean) {
     if (s != sigVal) {
       sigVal = s
@@ -29,10 +29,20 @@ abstract class CircuitSimulator extends Simulator {
 
   def probe(name: String, wire: Wire) {
     wire addAction {
-      () => afterDelay(0) {
-        println(
-          "  " + currentTime + ": " + name + " -> " +  wire.getSignal)
-      }
+      () =>
+        afterDelay(0) {
+          println(
+            "  " + currentTime + ": " + name + " -> " + wire.getSignal)
+        }
+    }
+  }
+  
+  def connect(in: Wire, out: Wire) {
+    in addAction {
+      () =>
+        afterDelay(0) {
+          out.setSignal(in.getSignal)
+        }
     }
   }
 
@@ -54,22 +64,42 @@ abstract class CircuitSimulator extends Simulator {
     a2 addAction andAction
   }
 
-  //
-  // to complete with orGates and demux...
-  //
-
   def orGate(a1: Wire, a2: Wire, output: Wire) {
-    ???
+    def orAction() {
+      val a1Sig = a1.getSignal
+      val a2Sig = a2.getSignal
+      afterDelay(OrGateDelay) { output.setSignal(a1Sig | a2Sig) }
+    }
+    a1 addAction orAction
+    a2 addAction orAction
+  }
+
+  def orGate2(in1: Wire, in2: Wire, output: Wire) {
+    val notIn1, notIn2, notOut = new Wire
+    inverter(in1, notIn1)
+    inverter(in2, notIn2)
+    andGate(notIn1, notIn2, notOut)
+    inverter(notOut, output)
   }
   
-  def orGate2(a1: Wire, a2: Wire, output: Wire) {
-    ???
+  def demux(in: Wire, cs: List[Wire], outs: List[Wire]) {
+    cs match {
+      case List() => {
+        connect(in, outs.head)
+      }
+      case c :: cs => {
+        val inAndC, inAndNotC, notC = new Wire
+        val subOuts = outs.grouped(outs.length / 2)
+        
+        andGate(in, c, inAndC)
+        demux(inAndC, cs, subOuts.next)
+        
+        inverter(c, notC)
+        andGate(in, notC, inAndNotC)
+        demux(inAndNotC, cs, subOuts.next)
+      }
+    }
   }
-
-  def demux(in: Wire, c: List[Wire], out: List[Wire]) {
-    ???
-  }
-
 }
 
 object Circuit extends CircuitSimulator {
