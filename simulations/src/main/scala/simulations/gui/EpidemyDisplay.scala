@@ -1,13 +1,14 @@
 package simulations
 package gui
 
-import javax.swing.{JComponent, JFrame, JLabel, Timer, SwingUtilities}
-import javax.swing.border.{EmptyBorder}
-import java.awt.{Graphics, Graphics2D, GridLayout, BorderLayout, Color, Dimension, Rectangle, Polygon}
-import java.awt.event.{ActionListener, ActionEvent}
+import javax.swing.{ JComponent, JFrame, JLabel, Timer, SwingUtilities }
+import javax.swing.border.{ EmptyBorder }
+import java.awt.{ Graphics, Graphics2D, GridLayout, BorderLayout, Color, Dimension, Rectangle, Polygon }
+import java.awt.event.{ ActionListener, ActionEvent }
 
 object EpidemyDisplay extends EpidemySimulator with App {
 
+  // Situation is the model of a Room with the counts of people inside
   class Situation(var healthy: Int, var sick: Int, var immune: Int) {
     def reset { healthy = 0; sick = 0; immune = 0 }
     def count(p: Person) {
@@ -18,14 +19,20 @@ object EpidemyDisplay extends EpidemySimulator with App {
     override def toString() = "Situation(" + healthy + ", " + sick + ", " + immune + ")"
   }
 
+  // World is a Grid of the Situations
   val world: Grid[Situation] = new Grid[Situation](SimConfig.roomRows, SimConfig.roomColumns)
+
   for (row <- 0 to world.height - 1; col <- 0 to world.width - 1)
     world.update(row, col, new Situation(0, 0, 0))
+
   var history: List[Situation] = Nil
   var historyContinues = true
 
+  // Update the Room counters
   def updateWorld() {
-    for (p <- persons) world(p.row, p.col) count p
+    for (p <- persons) {
+      world(p.row, p.col) count p
+    }
   }
   updateWorld()
 
@@ -61,13 +68,15 @@ object EpidemyDisplay extends EpidemySimulator with App {
 
   import GraphicConfig._
 
-  class Room (val worldRow: Int, val worldCol: Int) extends JComponent {
+  class Room(val worldRow: Int, val worldCol: Int) extends JComponent {
     val roomDimension = new Dimension(roomSize + 1, roomSize + 1)
     setPreferredSize(roomDimension)
     var situation: Situation = null
+    
     def sick = situation.sick min totalCount
     def healthy = (sick + situation.healthy) min totalCount
     def immune = (healthy + situation.immune) min totalCount
+    
     override def paintComponent(g: Graphics) {
       val graph = g.asInstanceOf[Graphics2D]
       graph.setColor(Color.WHITE)
@@ -84,6 +93,7 @@ object EpidemyDisplay extends EpidemySimulator with App {
         graph.drawOval(roomBorderSize + 1 + (col * (personSize + interPersonSize)), roomBorderSize + 1 + (row * (personSize + interPersonSize)), personSize, personSize)
       }
     }
+    
     def setSituation(s: Situation): this.type = {
       situation = s
       this
@@ -94,6 +104,7 @@ object EpidemyDisplay extends EpidemySimulator with App {
     setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE)
     setBackground(Color.BLACK)
     val rooms: Grid[Room] = new Grid[Room](world.height, world.width)
+    
     object populationGraph extends JComponent {
       val graphHeight = 100
       setPreferredSize(new Dimension(getWidth, graphHeight))
@@ -102,8 +113,7 @@ object EpidemyDisplay extends EpidemySimulator with App {
         if (history.isEmpty) {
           graph.setColor(Color.DARK_GRAY)
           graph.fill(new Rectangle(getWidth, graphHeight))
-        }
-        else {
+        } else {
           val steps: Double = history.length - 1
           val advanceStep: Double = (((getWidth - 3).toDouble) / (steps + 1)).toDouble
           def proportion(count: Int): Int =
@@ -137,9 +147,10 @@ object EpidemyDisplay extends EpidemySimulator with App {
           graph.fillPolygon(sickPoly)
         }
         graph.setColor(Color.WHITE)
-        graph.drawRect(0, 0, getWidth -1, graphHeight - 1)
+        graph.drawRect(0, 0, getWidth - 1, graphHeight - 1)
       }
     }
+
     object roomDisplay extends JComponent {
       setLayout(new GridLayout(world.width, world.height, interRoomSize, interRoomSize))
       setBorder(new EmptyBorder(worldBorderSize, 0, worldBorderSize, 0))
@@ -149,6 +160,7 @@ object EpidemyDisplay extends EpidemySimulator with App {
         add(room)
       }
     }
+
     object clock extends JLabel with ActionListener {
       val time = new Timer(delay, this)
       def start = time.start
@@ -160,7 +172,7 @@ object EpidemyDisplay extends EpidemySimulator with App {
       def actionPerformed(event: ActionEvent) {
         if (currentTime <= countTime) {
           assert(hasStep)
-          for (w <- world) w.reset
+          for (s <- world) s.reset
           updateWorld()
           if (historyContinues) updateHistory()
           frame.repaint()
@@ -171,14 +183,15 @@ object EpidemyDisplay extends EpidemySimulator with App {
           history = history.head :: history
         }
         if (!history.isEmpty) setText("On day " + countTime + ", " +
-                                      history.head.healthy + " healthy, " +
-                                      history.head.sick + " sick/dead, " +
-                                      history.head.immune + " immune.")
+          history.head.healthy + " healthy, " +
+          history.head.sick + " sick/dead, " +
+          history.head.immune + " immune.")
         populationGraph.repaint()
-      	countTime += 1
-        if (countTime == 150) println("Dead people on day 150: "+persons.count(p => p.dead))
+        countTime += 1
+        if (countTime == 150) println("Dead people on day 150: " + persons.count(p => p.dead))
       }
     }
+
     setContentPane(new JComponent {
       setBorder(new EmptyBorder(worldBorderSize, worldBorderSize, worldBorderSize, worldBorderSize))
       setLayout(new BorderLayout)
@@ -186,11 +199,13 @@ object EpidemyDisplay extends EpidemySimulator with App {
       add(roomDisplay, BorderLayout.CENTER)
       add(clock, BorderLayout.NORTH)
     })
+
     pack
     setResizable(false)
     setVisible(true)
     println("Scaliosis is ready to spread")
     clock.start
+
     override def paint(g: Graphics) {
       for (room <- rooms)
         room setSituation world(room.worldRow, room.worldCol)
