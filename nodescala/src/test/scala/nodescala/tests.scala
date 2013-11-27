@@ -155,7 +155,7 @@ class NodeScalaSuite extends FunSuite {
   }
 
   test("run test") {
-    var res = 1
+    @volatile var res = 1
     val working = Future.run() { ct =>
       Future {
         while (ct.nonCancelled) {
@@ -171,6 +171,8 @@ class NodeScalaSuite extends FunSuite {
       case _ => working.unsubscribe()
     }
     Await.ready(df, 2 second)
+    blocking{Thread.sleep(1000)}
+    assert(res == 2)
   }
 
   class DummyExchange(val request: Request) extends Exchange {
@@ -232,7 +234,7 @@ class NodeScalaSuite extends FunSuite {
     }
   }
 
-  ignore("Listener should serve the next request as a future") {
+  test("Listener should serve the next request as a future") {
     val dummy = new DummyListener(8191, "/test")
     val subscription = dummy.start()
 
@@ -250,7 +252,7 @@ class NodeScalaSuite extends FunSuite {
     subscription.unsubscribe()
   }
 
-  ignore("Server should serve requests") {
+  test("Server should serve requests") {
     val dummy = new DummyServer(8191)
     val dummySubscription = dummy.start("/testDir") {
       request => for (kv <- request.iterator) yield (kv + "\n").toString
