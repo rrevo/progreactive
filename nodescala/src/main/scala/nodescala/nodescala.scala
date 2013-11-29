@@ -55,6 +55,26 @@ trait NodeScala {
    *  3) as long as the token is not cancelled and there is a request from the http listener
    *     asynchronously process that request using the `respond` method
    *
+   * The flow for the http server is-
+   *  1. Start the server with this start method
+   *  2. The createListener method is invoked creates a Listener that starts a HttpServer on the port. The 
+   *  relativePath will be used for creating and removing the contexts later
+   *  3. An infinite running but cancellable future (main) is created and started. In this future, the promise
+   *  of the next request is created
+   *  4. Getting the next request promise creates the context on the listener and attaches a handler which 
+   *  will be invoked when an actual request arrives causing the future to be successful. This context will be 
+   *  removed once this promise is completed.
+   *  5. Now the main loop can notice that the next request has really arrive and respond to the request in 
+   *  an async fashion
+   *  6. A new future is obtained for the next request which re-registers a new context with the listener
+   *  7. A composite cancellable subscription is created for the listener and the main loop and returned by this
+   *  method for clients to stop the server.
+   * 
+   * Note: This is a pretty broken implementation of a server. Normally the context would not be removed and 
+   * added per request. The main listener would be the only loop invoking the handlers.
+   * There is a small window when the removeContext is invoked and no new context has been created causing requests
+   * to fail
+   * 
    *  @param relativePath   a relative path on which to start listening on
    *  @param handler        a function mapping a request to a response
    *  @return               a subscription that can stop the server and all its asynchronous operations *entirely*.
@@ -62,16 +82,21 @@ trait NodeScala {
   def start(relativePath: String)(handler: Request => Response): Subscription = {
     val listener = createListener(relativePath)
     val listenerSub = listener.start
+
     val requestSub = Future.run() { cancelToken =>
       Future {
+        var nextReq = listener.nextRequest
         while (cancelToken.nonCancelled) {
-          listener.nextRequest.onSuccess {
-            case t => {
-              val request = t._1
-              val exchange = t._2
-              val response = handler(request)
-              respond(exchange, cancelToken, response)
+          if (nextReq.isCompleted) {
+            nextReq onSuccess {
+              case t => {
+                val request = t._1
+                val exchange = t._2
+                val response = handler(request)
+                respond(exchange, cancelToken, response)
+              }
             }
+            nextReq = listener.nextRequest
           }
         }
       }
