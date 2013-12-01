@@ -1,11 +1,15 @@
 package suggestions
 
-import scala.swing.Reactions.Reaction
-
 package object gui {
 
+  /**
+   * scala.swing.Reactions.Reaction {
+   *   type Reaction = PartialFunction[Event, Unit]
+   * }
+   * 
+   */
   object Reaction {
-    def apply(r: Reaction) = r
+    def apply(r: scala.swing.Reactions.Reaction) = r
   }
 
 }
