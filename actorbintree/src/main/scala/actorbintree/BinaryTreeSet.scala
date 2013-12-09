@@ -53,7 +53,10 @@ object BinaryTreeSet {
 
 }
 
-class BinaryTreeSet extends Actor with ActorLogging {
+/**
+ * Actor that clients use for the Binary Tree
+ */
+class BinaryTreeSet extends Actor {
   import BinaryTreeSet._
   import BinaryTreeNode._
 
@@ -61,21 +64,53 @@ class BinaryTreeSet extends Actor with ActorLogging {
 
   var root = createRoot
 
-  var pendingQueue = Queue.empty[Operation]
+  def receive = normal
 
-  def receive: Receive = {
+  /*
+   * Normal mode for messages.
+   *  
+   * Operation messages are handled by forwarding to the root node
+   * 
+   * When the GC message is received, garbage collection of the removed nodes is started and 
+   * garbageCollecting mode become's
+   * 
+   */
+  def normal: Receive = {
     case c: Contains => root ! c
     case i: Insert => root ! i
     case r: Remove => root ! r
+    case GC => {
+
+      // Copy from root to newRoot and replace the root
+      val newRoot = createRoot
+      root ! CopyTo(newRoot)
+      root = newRoot
+      context.become(garbageCollecting(newRoot, Queue.empty))
+    }
   }
 
-  /**
-   * Handles messages while garbage collection is performed.
-   * `newRoot` is the root of the new binary tree where we want to copy
+  /*
+   * Garbage collection mode for messages
+   * 
+   * Operation messages are queued
+   * 
+   * When the Copy from root to newRoot is complete, pending operations are processed. Normal
+   * mode is then become'ed
+   *
+   * @param newRoot is the root of the new binary tree where we want to copy
    * all non-removed elements into.
+   * @param pendingQueue is the list of messages that were received during the GC process
    */
-  def garbageCollecting(newRoot: ActorRef): Receive = ???
-
+  def garbageCollecting(newRoot: ActorRef, pendingQueue: Queue[Operation]): Receive = {
+    case c: Contains => context.become(garbageCollecting(newRoot, pendingQueue.enqueue(c)))
+    case i: Insert => context.become(garbageCollecting(newRoot, pendingQueue.enqueue(i)))
+    case r: Remove => context.become(garbageCollecting(newRoot, pendingQueue.enqueue(r)))
+    case GC => // Ignore
+    case CopyFinished => {
+      pendingQueue.foreach(op => root ! op)
+      context.become(normal)
+    }
+  }
 }
 
 object BinaryTreeNode {
@@ -90,16 +125,31 @@ object BinaryTreeNode {
   def props(elem: Int, initiallyRemoved: Boolean) = Props(classOf[BinaryTreeNode], elem, initiallyRemoved)
 }
 
-class BinaryTreeNode(val elem: Int, val initiallyRemoved: Boolean) extends Actor with ActorLogging {
+/**
+ * A node in the Binary Search Tree
+ *
+ */
+class BinaryTreeNode(val elem: Int, val initiallyRemoved: Boolean) extends Actor {
   import BinaryTreeNode._
   import BinaryTreeSet._
 
   var subtrees = Map[Position, ActorRef]()
 
-  // State whether this node is removed from the tree
+  /*
+   * State whether this node is removed from the tree
+   */
   var removed = initiallyRemoved
 
-  def receive: Receive = {
+  def receive = normal
+
+  /*
+   * Normal mode of processing messages
+   * Operations are handled or may be deferred to the left or right nodes
+   * 
+   * On CopyTo, garbage collection has started and nodes that are not 'removed' are to be
+   * CopyTo to the treeNode
+   */
+  def normal: Receive = {
     case c: Contains => {
       var resp = false
       if (c.elem == elem && !removed) {
@@ -162,12 +212,56 @@ class BinaryTreeNode(val elem: Int, val initiallyRemoved: Boolean) extends Actor
         }
       }
     }
+    case ct: CopyTo => {
+      // Insert elem in the treeNode?
+      if (!removed) {
+        ct.treeNode ! Insert(self, 0, elem)
+      }
+      // CopyTo child nodes
+      val subtreeRefs = subtrees.values.toList
+      subtreeRefs.foreach(tree => tree ! CopyTo(ct.treeNode))
+
+      // Change mode and wait for completion notifications
+      context.become(copying(sender, removed, subtreeRefs.size))
+      if (removed && subtreeRefs.isEmpty) {
+        stop(sender)
+      }
+    }
   }
 
-  /**
-   * `expected` is the set of ActorRefs whose replies we are waiting for,
-   * `insertConfirmed` tracks whether the copy of this node to the new tree has been confirmed.
+  /*
+   * Wait for notifications in the garbage collectoin mode
+   * 
+   * @param inserted is for state of self.elem copy
+   * @param childCopyCount is the number of children that are pending copy notification
+   * 
+   * Once everything has been notified, this actor can be stopped and needs to notify the
+   * requester actor
    */
-  def copying(expected: Set[ActorRef], insertConfirmed: Boolean): Receive = ???
+  def copying(requester: ActorRef, inserted: Boolean, childCopyCount: Int): Receive = {
+    case of: OperationFinished => {
+      if (checkStop(true, childCopyCount)) {
+        stop(requester)
+      } else {
+        context.become(copying(requester, true, childCopyCount))
+      }
+    }
+    case CopyFinished => {
+      if (checkStop(inserted, childCopyCount - 1)) {
+        stop(requester)
+      } else {
+        context.become(copying(requester, inserted, childCopyCount - 1))
+      }
+    }
+  }
+
+  def checkStop(inserted: Boolean, copyCount: Int): Boolean = {
+    inserted && copyCount == 0
+  }
+
+  def stop(requester: ActorRef): Unit = {
+    requester ! CopyFinished
+    context.stop(self)
+  }
 
 }
