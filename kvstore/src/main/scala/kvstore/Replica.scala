@@ -13,6 +13,9 @@ import akka.actor.OneForOneStrategy
 import akka.actor.SupervisorStrategy
 import akka.util.Timeout
 
+/**
+ * Primary or Secondary Replica node of the store
+ */
 object Replica {
   sealed trait Operation {
     def key: String
@@ -35,28 +38,41 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   import Replicator._
   import Persistence._
   import context.dispatcher
+  import scala.language.postfixOps
 
-  /*
-   * The contents of this actor is just a suggestion, you can implement it in any way you like.
-   */
-  
+  // Map containing persisted key values
   var kv = Map.empty[String, String]
+
   // a map from secondary replicas to replicators
   var secondaries = Map.empty[ActorRef, ActorRef]
+
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
 
+  arbiter ! Join
+
   def receive = {
-    case JoinedPrimary   => context.become(leader)
+    case JoinedPrimary => context.become(leader)
     case JoinedSecondary => context.become(replica)
   }
 
-  /* TODO Behavior for  the leader role. */
+  /* Behavior for  the leader role. */
   val leader: Receive = {
-    case _ =>
+    case i: Insert => {
+      kv = kv + ((i.key, i.value))
+      sender ! OperationAck(i.id)
+    }
+    case r: Remove => {
+      kv = kv - ((r.key))
+      sender ! OperationAck(r.id)
+    }
+    case g: Get => {
+      val valueOption = kv.get(g.key)
+      sender ! GetResult(g.key, valueOption, g.id)
+    }
   }
 
-  /* TODO Behavior for the replica role. */
+  /* Behavior for the replica role. */
   val replica: Receive = {
     case _ =>
   }

@@ -5,6 +5,9 @@ import akka.actor.Actor
 import akka.actor.ActorRef
 import scala.concurrent.duration._
 
+/**
+ * Replication protocol
+ */
 object Replicator {
   case class Replicate(key: String, valueOption: Option[String], id: Long)
   case class Replicated(key: String, id: Long)
@@ -20,10 +23,6 @@ class Replicator(val replica: ActorRef) extends Actor {
   import Replica._
   import context.dispatcher
   
-  /*
-   * The contents of this actor is just a suggestion, you can implement it in any way you like.
-   */
-
   // map from sequence number to pair of sender and request
   var acks = Map.empty[Long, (ActorRef, Replicate)]
   // a sequence of not-yet-sent snapshots (you can disregard this if not implementing batching)

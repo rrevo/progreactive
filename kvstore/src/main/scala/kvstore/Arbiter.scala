@@ -1,8 +1,11 @@
 package kvstore
 
-import akka.actor.{ActorRef, Actor}
+import akka.actor.{ ActorRef, Actor }
 import scala.collection.immutable
 
+/**
+ * Handles membership of the nodes and assigns primary or secondary roles to the nodes
+ */
 object Arbiter {
   case object Join
 
