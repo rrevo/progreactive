@@ -72,9 +72,26 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     }
   }
 
+  var seq = 0
+
   /* Behavior for the replica role. */
   val replica: Receive = {
-    case _ =>
+    case g: Get => {
+      val valueOption = kv.get(g.key)
+      sender ! GetResult(g.key, valueOption, g.id)
+    }
+    case s: Snapshot => {
+      if (seq == s.seq) {
+        s.valueOption match {
+          case Some(value) => kv = kv + ((s.key, value))
+          case None => kv = kv - ((s.key))
+        }
+        seq = seq + 1
+        sender ! SnapshotAck(s.key, s.seq)
+      } else if (seq > s.seq) {
+        sender ! SnapshotAck(s.key, s.seq)
+      }
+    }
   }
 
 }
