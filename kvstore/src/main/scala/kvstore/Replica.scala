@@ -49,6 +49,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
 
+  val persistence = context.actorOf(persistenceProps)
+
   arbiter ! Join
 
   def receive = {
@@ -72,7 +74,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     }
   }
 
+  /* Secondary replica state */
   var seq = 0
+  var persistPending = Map.empty[Long, (Snapshot, ActorRef)]
 
   /* Behavior for the replica role. */
   val replica: Receive = {
@@ -83,13 +87,55 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case s: Snapshot => {
       if (seq == s.seq) {
         s.valueOption match {
-          case Some(value) => kv = kv + ((s.key, value))
-          case None => kv = kv - ((s.key))
+          case Some(value) => {
+            persistPending += s.seq -> (s, sender)
+            kv += s.key -> value
+            val p = Persist(s.key, s.valueOption, s.seq)
+            context.system.scheduler.scheduleOnce(100 millisecond, self, PersistRetryTimeOut(s.seq, p))
+            context.system.scheduler.scheduleOnce(1 second, self, PersistCancelTimeOut(s.seq, p))
+            persistence ! p
+          }
+          case None => {
+            persistPending += s.seq -> (s, sender)
+            kv -= s.key
+            val p = Persist(s.key, None, s.seq)
+            context.system.scheduler.scheduleOnce(100 millisecond, self, PersistRetryTimeOut(s.seq, p))
+            context.system.scheduler.scheduleOnce(1 second, self, PersistCancelTimeOut(s.seq, p))
+            persistence ! p
+          }
         }
         seq = seq + 1
-        sender ! SnapshotAck(s.key, s.seq)
+
       } else if (seq > s.seq) {
         sender ! SnapshotAck(s.key, s.seq)
+      }
+    }
+    case p: Persisted => {
+      persistPending.get(p.id) match {
+        case Some(snapshot_sender) => {
+          persistPending -= p.id
+          snapshot_sender._2 ! SnapshotAck(snapshot_sender._1.key, snapshot_sender._1.seq)
+        }
+        case None => // Already acknowledged so ignore
+      }
+    }
+    case r: PersistRetryTimeOut => {
+      persistPending.get(r.id) match {
+        case Some(snapshot_sender) => {
+          // Retry again
+          persistence ! r.p
+          context.system.scheduler.scheduleOnce(100 millisecond, self, PersistRetryTimeOut(r.id, r.p))
+        }
+        case None => // Already acknowledged so ignore
+      }
+    }
+    case c: PersistCancelTimeOut => {
+      persistPending.get(c.id) match {
+        case Some(snapshot_sender) => {
+          // Failed persistence so just remove from persistPending
+          persistPending -= c.id
+        }
+        case None => // Already acknowledged so ignore
       }
     }
   }
