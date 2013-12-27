@@ -64,18 +64,28 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   }
 
   val actorRef = self
-  
+
   /* Behavior for  the leader role. */
   val leader: Receive = {
     case rs: Replicas => {
       val addedSecs = rs.replicas.filter(sec => !secondaries.keySet.contains(sec) && sec != actorRef)
-      // TODO Act on replicas removed
       val removedSecs = secondaries.keySet.filter(sec => !rs.replicas.contains(sec))
 
       addedSecs.foreach(addedSec => {
         val replicator = context.actorOf(Replicator.props(addedSec))
         secondaries += addedSec -> replicator
         replicators += replicator
+        addReplicator(replicator)
+      })
+
+      removedSecs.foreach(removedSec => {
+        secondaries.get(removedSec) match {
+          case Some(replicator) => {
+            removeReplicator(replicator)
+            context.stop(replicator)
+          }
+          case None => throw new IllegalStateException
+        }
       })
     }
     case i: Insert => {
@@ -178,6 +188,30 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       ackPending(id) ! OperationFailed(id)
       ackPending -= id
     }
+  }
+
+  def addReplicator(replicator: ActorRef) {
+    var localSeq = 0
+    kv.foreach(entry => {
+      val rep = Replicate(entry._1, Some(entry._2), localSeq)
+      replicator ! rep
+      localSeq += 1
+    })
+  }
+
+  def removeReplicator(replicator: ActorRef) {
+    replicatePending.foreach(entry => {
+      replicatePending.get(entry._1).foreach(replicators => {
+        if (replicators.contains(replicator)) {
+          if (replicators.size == 1) {
+            replicatePending -= entry._1
+            opAck(entry._1)
+          } else {
+            replicatePending += entry._1 -> (replicators - replicator)
+          }
+        }
+      })
+    })
   }
 
   /* Secondary replica state */
