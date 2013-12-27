@@ -48,8 +48,13 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
+  var replicatePending = Map.empty[Long, Set[ActorRef]]
 
+  // Persistence state
   val persistence = context.actorOf(persistenceProps)
+  var persistPending = Map.empty[Long, (Snapshot, ActorRef)]
+
+  var ackPending = Map.empty[Long, ActorRef]
 
   arbiter ! Join
 
@@ -58,25 +63,125 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case JoinedSecondary => context.become(replica)
   }
 
+  val actorRef = self
+  
   /* Behavior for  the leader role. */
   val leader: Receive = {
+    case rs: Replicas => {
+      val addedSecs = rs.replicas.filter(sec => !secondaries.keySet.contains(sec) && sec != actorRef)
+      // TODO Act on replicas removed
+      val removedSecs = secondaries.keySet.filter(sec => !rs.replicas.contains(sec))
+
+      addedSecs.foreach(addedSec => {
+        val replicator = context.actorOf(Replicator.props(addedSec))
+        secondaries += addedSec -> replicator
+        replicators += replicator
+      })
+    }
     case i: Insert => {
-      kv = kv + ((i.key, i.value))
-      sender ! OperationAck(i.id)
+      ackPending += i.id -> sender
+
+      // Invoke replicators
+      if (!replicators.isEmpty) {
+        val rep = Replicate(i.key, Some(i.value), i.id)
+        replicatePending += rep.id -> replicators
+        replicators.foreach(replicator => replicator ! rep)
+      }
+
+      // Invoke local persistence
+      val s = Snapshot(i.key, Some(i.value), i.id)
+      persistPending += s.seq -> (s, sender)
+      kv += s.key -> i.value
+      val p = Persist(s.key, s.valueOption, s.seq)
+      persistence ! p
+
+      // Start timers
+      context.system.scheduler.scheduleOnce(100 millisecond, self, PersistRetryTimeOut(s.seq, p))
+      context.system.scheduler.scheduleOnce(1 second, self, PersistCancelTimeOut(s.seq, p))
     }
     case r: Remove => {
-      kv = kv - ((r.key))
-      sender ! OperationAck(r.id)
+      ackPending += r.id -> sender
+
+      // Invoke replicators
+      if (!replicators.isEmpty) {
+        val rep = Replicate(r.key, None, r.id)
+        replicatePending += rep.id -> replicators
+        replicators.foreach(replicator => replicator ! rep)
+      }
+
+      // Invoke local persistence
+      val s = Snapshot(r.key, None, r.id)
+      persistPending += s.seq -> (s, sender)
+      kv -= s.key
+      val p = Persist(s.key, None, s.seq)
+      persistence ! p
+
+      // Start timers
+      context.system.scheduler.scheduleOnce(100 millisecond, self, PersistRetryTimeOut(s.seq, p))
+      context.system.scheduler.scheduleOnce(1 second, self, PersistCancelTimeOut(s.seq, p))
     }
     case g: Get => {
       val valueOption = kv.get(g.key)
       sender ! GetResult(g.key, valueOption, g.id)
     }
+    case p: Persisted => {
+      persistPending.get(p.id) match {
+        case Some(snapshot_sender) => {
+          persistPending -= p.id
+          opAck(p.id)
+        }
+        case None => // Already acknowledged so ignore
+      }
+    }
+    case rep: Replicated => {
+      val replicator = sender
+      replicatePending.get(rep.id) match {
+        case Some(replicators) => {
+          if (replicators.contains(replicator)) {
+            if (replicators.size == 1) {
+              replicatePending -= rep.id
+              opAck(rep.id)
+            } else {
+              replicatePending += rep.id -> (replicators - replicator)
+            }
+          }
+        }
+        case None => // Ignore
+      }
+    }
+    case rt: PersistRetryTimeOut => {
+      persistPending.get(rt.id) match {
+        case Some(snapshot_sender) => {
+          // Retry again
+          persistence ! rt.p
+          context.system.scheduler.scheduleOnce(100 millisecond, self, PersistRetryTimeOut(rt.id, rt.p))
+        }
+        case None => // Already acknowledged so ignore
+      }
+    }
+    case ct: PersistCancelTimeOut => {
+      opFail(ct.id)
+    }
+  }
+
+  def opAck(id: Long) {
+    if (!persistPending.contains(id) && !replicatePending.contains(id) && ackPending.contains(id)) {
+      ackPending(id) ! OperationAck(id)
+      ackPending -= id
+    }
+  }
+
+  def opFail(id: Long) {
+    persistPending -= id
+    replicatePending -= id
+    if (ackPending.contains(id)) {
+      ackPending(id) ! OperationFailed(id)
+      ackPending -= id
+    }
   }
 
   /* Secondary replica state */
   var seq = 0
-  var persistPending = Map.empty[Long, (Snapshot, ActorRef)]
 
   /* Behavior for the replica role. */
   val replica: Receive = {
